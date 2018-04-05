@@ -1,12 +1,15 @@
 #!/usr/bin/env python
+"""A script for polling YARN ResourceManager API and collecting statistical
+information about Applications/Jobs that reached their final state."""
+
+__author__ = 'Taras Korenko'
 
 import ConfigParser
 import json
-import requests
 import sys
 import time
 
-__author__ = 'Taras Korenko'
+import requests
 
 ex_unexpected_struct = 'Unexpected input structure'
 ex_arg_not_a_dict = 'Function argument is not a dictionary'
@@ -19,7 +22,7 @@ def zbx_unsupp_exit():
 
 ## --- AppsStats -------------------------------------------------------
 
-AppsStatsDescrs = (
+_AppsStatsDescrs = (
     ('finished.succeeded', 2, 'FINISHED', 'SUCCEEDED'),
     ('finished.failed'   , 2, 'FINISHED', 'FAILED'   ),
     ('finished.killed'   , 2, 'FINISHED', 'KILLED'   ),
@@ -32,15 +35,15 @@ AppsStatsDescrs = (
 def AppsStats_initObject():
     obj = { }
 
-    for descr in AppsStatsDescrs:
+    for descr in _AppsStatsDescrs:
         obj.update( { descr[0]: 0 } )
 
     return obj
 
 def AppsStats_lookupCounterName(appState, appFinalStatus):
-    counterName = AppsStatsDescrs[len(AppsStatsDescrs) - 1][0];
+    counterName = _AppsStatsDescrs[len(_AppsStatsDescrs) - 1][0];
 
-    for descr in AppsStatsDescrs:
+    for descr in _AppsStatsDescrs:
         match = 0
 
         if (descr[1] > 0 and appState       == descr[2]):
@@ -100,8 +103,8 @@ def QueuesStats_updateStats(qsObj, queueName, appState, appFinalStatus):
 
 ## --- AppsHistory -----------------------------------------------------
 
-ah_appDescrkeys = ['id', 'state', 'finalStatus', 'queue', 'applicationType',
-    'finishedTime']
+_ah_appDescrkeys = ['id', 'state', 'finalStatus', 'applicationType',
+    'queue', 'finishedTime']
 
 def AppsHistory_initObject():
     obj = { }
@@ -115,7 +118,7 @@ def AppsHistory_insertAppRecord(ahObj, appDescr):
         raise KeyError(ex_arg_not_a_dict)
 
     availableKeys = set(appDescr.keys())
-    expectedKeys  = set(ah_appDescrkeys)
+    expectedKeys  = set(_ah_appDescrkeys)
 
     if not expectedKeys.issubset( availableKeys ):
         print 'Missing AppDescr Keys: ', expectedKeys.difference(
@@ -139,8 +142,7 @@ def AppsHistory_insertAppRecord(ahObj, appDescr):
 
     ahObj.update( { appId : localAppDescr } )
 
-# XXX consider better name for 'absTime'
-def AppsHistory_removeOldRecords(ahObj, absTime):
+def AppsHistory_removeOldRecords(ahObj, pastTimestamp):
     if not isinstance(ahObj, dict):
         raise KeyError(ex_arg_not_a_dict)
 
@@ -152,7 +154,7 @@ def AppsHistory_removeOldRecords(ahObj, absTime):
     for appId in ahObj:
         # 'finishedTime' is expressed in miliseconds
         appFinTime = int(ahObj[appId]['finishedTime']) / 1000
-        if appFinTime < int(absTime):
+        if appFinTime < int(pastTimestamp):
             appsToRemove.append(appId)
 
     for appId in appsToRemove:
@@ -272,7 +274,7 @@ def ScriptState_jumpTo(ss, treePath):
 def ScriptState_jumpTo_safe(ss, treePath):
     try:
         leaf = ScriptState_jumpTo(ss, treePath)
-    except:
+    except Exception:
         zbx_unsupp_exit()
         ## NOTREACHED ##
 
@@ -295,7 +297,7 @@ def _YarnRMAppsPoller_pollClusterAppsAPI(baseURL, finishedTime):
 
     # Query external resource with HTTP GET
     try:
-        reply = requests.get(url, headers = hdrs, params = pars)
+        reply = requests.get(url, headers=hdrs, params=pars)
         if (reply.status_code != requests.codes.ok):
             print 'Status Code:', reply.status_code
             print 'HTTP request failed'
@@ -322,16 +324,16 @@ def _YarnRMAppsPoller_pollClusterAppsAPI(baseURL, finishedTime):
 
 # (c) https://hadoop.apache.org/docs/stable/hadoop-yarn/hadoop-yarn-site/ \
 #      ResourceManagerRest.html#Cluster_Applications_API
-#---------------------------------------------------------------------------
+#-----------------------------------------------------------------------
 #{
 #  "apps": {
 #    "app": [
 #      {
 #        "id": "application_1519830322804_0388", 
 #        ...
-#---------------------------------------------------------------------------
-#   An exact structure is expected here ^, thus I step two levels in depth
-# to reach a list of applications:
+#-----------------------------------------------------------------------
+#   An exact structure is expected here ^, thus I step two levels in
+# depth to reach a list of applications:
 def _YarnRMAppsPoller_extractAppsList(jResp):
     if isinstance(jResp, dict):
         js2 = jResp.pop('apps')
@@ -362,7 +364,7 @@ def Config_readFrom(fname, ioCfg):
         val = confParser.get('global', key)
         ioCfg[key] = val
 
-## --- fapps --------------------------------------------------------------
+## --- fapps -----------------------------------------------------------
 # Config file + CMD ARGV handling
 
 # The following values should be supplied by script's config file:
@@ -394,8 +396,8 @@ if not cmd in OP_MODES:
     print 'unknown command, choose from ', OP_MODES
     exit(0)
 
-#---------------------------------------------------------------------------
-# Load saved script state; missing state file should not break the execution
+#-----------------------------------------------------------------------
+# Load saved script state; missing state file should not break the run
 
 scriptState['appsHistory'] = AppsHistory_initObject()
 scriptState['queuesStats'] = QueuesStats_initObject()
@@ -414,7 +416,7 @@ ahObj = scriptState['appsHistory']
 qsObj = scriptState['queuesStats']
 lvObj = scriptState['localVars']
 
-#---------------------------------------------------------------------------
+#-----------------------------------------------------------------------
 # OP_PRINT, OP_DUMP modes of operation are handled here
 
 if (cmd != OP_POLL):
@@ -433,28 +435,27 @@ if (cmd == OP_PRINT):
 if (cmd == OP_DUMP):
     print '# Debug interface'
     ptr = ScriptState_jumpTo(scriptState, sys.argv)
-    print json.dumps(ptr, indent = 4, sort_keys = True)
+    print json.dumps(ptr, indent=4, sort_keys=True)
     exit(0)
     ## NOTREACHED ##
 
-#---------------------------------------------------------------------------
+#-----------------------------------------------------------------------
 # OP_POLL mode:
 
-# XXX consider better name for 'olderThan_ts'
-olderThan_ts = currentTime - int(cfg['keep_history'])
+timestampInPast = currentTime - int(cfg['keep_history'])
 
 listOfApps = YarnRMAppsPoller_getFinalizedAppsList(cfg['baseurl'],
-    olderThan_ts)
+    timestampInPast)
 
 for app in listOfApps:
     AppsHistory_insertAppRecord(ahObj, app)
 
-removedApps = AppsHistory_removeOldRecords(ahObj, olderThan_ts)
+removedApps = AppsHistory_removeOldRecords(ahObj, timestampInPast)
 
 addedApps   = AppsHistory_updateQueuesStats(ahObj, qsObj)
 
-# XXX removeme:
-print 'appsHistory: added ', addedApps, ', removed ', removedApps
+if 'verbose' in sys.argv:
+    print 'appsHistory: added ', addedApps, ', removed ', removedApps
 
 LocalVars_set(lvObj, 'lastpoll_at', str(currentTime))
 
