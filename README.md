@@ -29,10 +29,11 @@ Where:
 
 ## Examples:
 ```sh
-% ./yarnappstats.py poll
+% ./yarnappstats.py poll verbose
 appsHistory: added  1 , removed  0
 ```
-Note: `appsHistory: added ...` may be removed soon.
+
+Note: The script produces no output when the data was collected and processed successfully (for invocations as a cronjob).  For manual runs, the `verbose` argument may be added.
 
 ```sh
 % ./yarnappstats.py dump
