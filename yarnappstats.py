@@ -1,6 +1,11 @@
-#!/usr/bin/env python
-"""A script for polling YARN ResourceManager API and collecting statistical
-information about Applications/Jobs that reached their final state."""
+#!/usr/bin/python2
+"""A script for collecting Jobs statistics from YARN RM.
+
+This script is intented to poll YARN Resource Manager and collect
+statistical information about Applications/Jobs that reached their
+final state.
+"""
+#.......................................................................
 
 __author__ = 'Taras Korenko'
 
@@ -11,270 +16,242 @@ import time
 
 import requests
 
-ex_unexpected_struct = 'Unexpected input structure'
-ex_arg_not_a_dict = 'Function argument is not a dictionary'
-ex_arg_not_a_list = 'Function argument is not a list'
-ex_queue_not_found = 'Queue not found'
+
+EX_UNEXPECTED_STRUCT = 'Unexpected input structure'
+EX_ARG_NOT_A_DICT = 'Function argument is not a dictionary'
+EX_ARG_NOT_A_LIST = 'Function argument is not a list'
+EX_QUEUE_NOT_FOUND = 'Queue not found'
+
 
 def zbx_unsupp_exit():
+    """Hides script's guts from zabbix-agent"""
     print 'ZBX_UNSUPPORTED'
     exit(0)
 
-## --- AppsStats -------------------------------------------------------
 
-_AppsStatsDescrs = (
+_APPSSTATSDESCRS = (
     ('finished.succeeded', 2, 'FINISHED', 'SUCCEEDED'),
-    ('finished.failed'   , 2, 'FINISHED', 'FAILED'   ),
-    ('finished.killed'   , 2, 'FINISHED', 'KILLED'   ),
+    ('finished.failed', 2, 'FINISHED', 'FAILED'),
+    ('finished.killed', 2, 'FINISHED', 'KILLED'),
     ('finished.undefined', 2, 'FINISHED', 'UNDEFINED'),
-    ('failed'            , 1, 'FAILED'  , ''         ),
-    ('killed'            , 1, 'KILLED'  , ''         ),
-    ('other'             , 0, ''        , ''         )
+    ('failed', 1, 'FAILED', ''),
+    ('killed', 1, 'KILLED', ''),
+    ('other', 0, '', '')
 )
 
-def AppsStats_initObject():
-    obj = { }
 
-    for descr in _AppsStatsDescrs:
-        obj.update( { descr[0]: 0 } )
+def appsstats_init_object():
+    """Creates a structure for keeping statistics counters"""
+    obj = {}
+
+    for descr in _APPSSTATSDESCRS:
+        obj[descr[0]] = 0
 
     return obj
 
-def AppsStats_lookupCounterName(appState, appFinalStatus):
-    counterName = _AppsStatsDescrs[len(_AppsStatsDescrs) - 1][0];
 
-    for descr in _AppsStatsDescrs:
+def appsstats_lookup_counter_name(app_state, app_final_status):
+    """Maps application's (state,finalStatus) to stats counter name"""
+    counter_name = _APPSSTATSDESCRS[len(_APPSSTATSDESCRS) - 1][0]
+
+    for descr in _APPSSTATSDESCRS:
         match = 0
 
-        if (descr[1] > 0 and appState       == descr[2]):
+        if descr[1] > 0 and app_state == descr[2]:
             match += 1
-        if (descr[1] > 1 and appFinalStatus == descr[3]):
+        if descr[1] > 1 and app_final_status == descr[3]:
             match += 1
-        if (descr[1] == match):
-            counterName = descr[0]
+        if descr[1] == match:
+            counter_name = descr[0]
             break
 
-    return counterName
+    return counter_name
 
-def AppsStats_increaseCounter(appsStatsObj, appState, appFinalStatus):
-    if not isinstance(appsStatsObj, dict):
-        raise TypeError(ex_arg_not_a_dict)
 
-    counterName = AppsStats_lookupCounterName(appState, appFinalStatus)
-    appsStatsObj[ counterName ] += 1
+def appsstats_increase_counter(appsstats_obj, app_state, app_final_status):
+    """Handles updates of an appropriate stats counter"""
+    if not isinstance(appsstats_obj, dict):
+        raise TypeError(EX_ARG_NOT_A_DICT)
 
-def AppsStats_getCounter(appsStatsObj, counterName):
-    if not isinstance(appsStatsObj, dict):
-        raise TypeError(ex_arg_not_a_dict)
+    counter_name = appsstats_lookup_counter_name(app_state, app_final_status)
+    appsstats_obj[counter_name] += 1
 
-    if not counterName in appsStatsObj:
-        raise KeyError('Key not found: ' + counterName)
 
-    return appsStatsObj[counterName]
+def appsstats_get_counter(appsstats_obj, counter_name):
+    """Retrieves value of a stats counter by its name (aka 'getter')"""
+    if not isinstance(appsstats_obj, dict):
+        raise TypeError(EX_ARG_NOT_A_DICT)
 
-## --- QueuesStats -----------------------------------------------------
+    if counter_name not in appsstats_obj:
+        raise KeyError('Key not found: ' + counter_name)
 
-def QueuesStats_initObject():
-    obj = { }
-    return obj
+    return appsstats_obj[counter_name]
 
-def QueuesStats_getStats(qsObj, queueName, counterName):
-    if not isinstance(qsObj, dict):
-        raise KeyError(ex_arg_not_a_dict)
 
-    if not queueName in qsObj:
-        raise KeyError(ex_queue_not_found + ': ' + queueName)
+def queuesstats_update_stats(qs_obj, queue_name, app_state, app_final_status):
+    """Updates an appropriate counter depending on queue name"""
+    if not isinstance(qs_obj, dict):
+        raise KeyError(EX_ARG_NOT_A_DICT)
 
-    appsStatsObj = qsObj[queueName]
+    if queue_name not in qs_obj:
+        qs_obj[queue_name] = appsstats_init_object()
 
-    return AppsStats_getCounter(appsStatsObj, counterName)
+    appsstats_obj = qs_obj[queue_name]
 
-def QueuesStats_updateStats(qsObj, queueName, appState, appFinalStatus):
-    if not isinstance(qsObj, dict):
-        raise KeyError(ex_arg_not_a_dict)
+    appsstats_increase_counter(appsstats_obj, app_state, app_final_status)
 
-    if not queueName in qsObj:
-        appsStatsObj = AppsStats_initObject()
-        qsObj.update( { queueName: appsStatsObj } )
 
-    appsStatsObj = qsObj[queueName]
+_AH_APPDESCRKEYS = ['id', 'state', 'finalStatus', 'applicationType',
+                    'queue', 'finishedTime']
 
-    AppsStats_increaseCounter(appsStatsObj, appState, appFinalStatus)
 
-## --- AppsHistory -----------------------------------------------------
+def appshistory_insert_app_record(ah_obj, app_descr):
+    """Adds application id (+ some other descrs) to the local history"""
+    if not isinstance(ah_obj, dict):
+        raise KeyError(EX_ARG_NOT_A_DICT)
 
-_ah_appDescrkeys = ['id', 'state', 'finalStatus', 'applicationType',
-    'queue', 'finishedTime']
+    if not isinstance(app_descr, dict):
+        raise KeyError(EX_ARG_NOT_A_DICT)
 
-def AppsHistory_initObject():
-    obj = { }
-    return obj
+    available_keys = set(app_descr.keys())
+    expected_keys = set(_AH_APPDESCRKEYS)
 
-def AppsHistory_insertAppRecord(ahObj, appDescr):
-    if not isinstance(ahObj, dict):
-        raise KeyError(ex_arg_not_a_dict)
+    if not expected_keys.issubset(available_keys):
+        print 'Missing AppDescr Keys: ', expected_keys.difference(
+            available_keys)
+        raise ValueError('Invalid input: some app_descr keys are missing')
 
-    if not isinstance(appDescr, dict):
-        raise KeyError(ex_arg_not_a_dict)
+    app_id = app_descr['id']
 
-    availableKeys = set(appDescr.keys())
-    expectedKeys  = set(_ah_appDescrkeys)
+    if app_id not in ah_obj:
+        ah_obj[app_id] = {
+            'state'           : app_descr['state'],
+            'finalStatus'     : app_descr['finalStatus'],
+            'queue'           : app_descr['queue'].lower(),
+            'applicationType' : app_descr['applicationType'],
+            'finishedTime'    : app_descr['finishedTime'],
+            '_processed'      : 0
+        }
 
-    if not expectedKeys.issubset( availableKeys ):
-        print 'Missing AppDescr Keys: ', expectedKeys.difference(
-            availableKeys )
-        raise ValueError('Invalid input: some appDescr keys are missing')
 
-    appId = appDescr['id']
+def appshistory_remove_old_records(ah_obj, past_timestamp):
+    """Removes outdated applications from local history"""
+    if not isinstance(ah_obj, dict):
+        raise KeyError(EX_ARG_NOT_A_DICT)
 
-    if appId in ahObj:
-        # do not process duplicates
+    if len(ah_obj) == 0:
         return
 
-    localAppDescr = {
-        'state'           : appDescr['state'],
-        'finalStatus'     : appDescr['finalStatus'],
-        'queue'           : appDescr['queue'].lower(),
-        'applicationType' : appDescr['applicationType'],
-        'finishedTime'    : appDescr['finishedTime'],
-        '_processed'      : '0'
-    }
+    apps_to_remove = []
 
-    ahObj.update( { appId : localAppDescr } )
+    for app_id in ah_obj:
+        # 'finishedTime' is expressed in miliseconds, we need seconds:
+        app_fin_time = int(ah_obj[app_id]['finishedTime']) / 1000
+        if app_fin_time < int(past_timestamp):
+            apps_to_remove.append(app_id)
 
-def AppsHistory_removeOldRecords(ahObj, pastTimestamp):
-    if not isinstance(ahObj, dict):
-        raise KeyError(ex_arg_not_a_dict)
+    for app_id in apps_to_remove:
+        del ah_obj[app_id]
 
-    if len(ahObj) == 0:
-        return
+    return len(apps_to_remove)
 
-    appsToRemove = []
 
-    for appId in ahObj:
-        # 'finishedTime' is expressed in miliseconds
-        appFinTime = int(ahObj[appId]['finishedTime']) / 1000
-        if appFinTime < int(pastTimestamp):
-            appsToRemove.append(appId)
+def appshistory_update_queue_stats(ah_obj, qs_obj):
+    """Walks local history to process freshly added applications"""
+    if not isinstance(ah_obj, dict):
+        raise KeyError(EX_ARG_NOT_A_DICT)
+    if not isinstance(qs_obj, dict):
+        raise KeyError(EX_ARG_NOT_A_DICT)
 
-    for appId in appsToRemove:
-        del ahObj[ appId ]
+    processed_apps_qty = 0
 
-    return len(appsToRemove)
+    for app_id in ah_obj:
+        app = ah_obj[app_id]
+        if app['_processed'] == 0:
+            queue_name = app['queue']
+            app_state = app['state']
+            app_final_status = app['finalStatus']
+            queuesstats_update_stats(qs_obj, queue_name, app_state,
+                                     app_final_status)
+            app['_processed'] = 1
+            processed_apps_qty += 1
 
-def AppsHistory_updateQueuesStats(ahObj, qsObj):
-    if not isinstance(ahObj, dict):
-        raise KeyError(ex_arg_not_a_dict)
-    if not isinstance(qsObj, dict):
-        raise KeyError(ex_arg_not_a_dict)
+    return processed_apps_qty
 
-    processedAppsQty = 0
 
-    for appId in ahObj:
-        app = ahObj[appId]
-        if 0 == int(app['_processed']):
-            queueName      = app['queue']
-            appState       = app['state']
-            appFinalStatus = app['finalStatus']
-            QueuesStats_updateStats(qsObj,
-                queueName, appState, appFinalStatus)
-            app['_processed'] = '1'
-            processedAppsQty += 1
+def localvars_get(lv_obj, key):
+    """Retrieves key:value pair from script state file"""
+    if not isinstance(lv_obj, dict):
+        raise KeyError(EX_ARG_NOT_A_DICT)
 
-    return processedAppsQty
+    return lv_obj.get(key, None)
 
-## --- LocalVars -------------------------------------------------------
 
-def LocalVars_initObject():
-    obj = { }
-    return obj
+def localvars_set(lv_obj, key, val):
+    """Stores key:value pair into script state file"""
+    if not isinstance(lv_obj, dict):
+        raise KeyError(EX_ARG_NOT_A_DICT)
 
-def LocalVars_get(lvObj, key):
-    if not isinstance(lvObj, dict):
-        raise KeyError(ex_arg_not_a_dict)
+    lv_obj[key] = val
 
-    val = None
 
-    if key in lvObj:
-        val = lvObj[key]
-
-    return val
-
-def LocalVars_set(lvObj, key, val):
-    if not isinstance(lvObj, dict):
-        raise KeyError(ex_arg_not_a_dict)
-
-    lvObj[key] = val
-
-def LocalVars_addInt(lvObj, key, add):
-    if not isinstance(lvObj, dict):
-        raise KeyError(ex_arg_not_a_dict)
-
-    prevVal = LocalVars_get(lvObj, key)
-    if prevVal == None:
-        prevVal = '0'
-
-    lvObj[key] = str(int(prevVal) + int(add))
-
-## --- ScriptState -----------------------------------------------------
-
-scriptState = {
-    'localVars'   : { },
-    'appsHistory' : { },
-    'queuesStats' : { }
-}
-
-def ScriptState_loadFromFile(ss, fname):
-    with open(fname, 'r') as fh:
+def scriptstate_load_from_file(ss_obj, fname):
+    """Loads script state left from previous run"""
+    with open(fname, 'r') as f_obj:
         try:
-            jScriptState = json.load(fh)
-        except ValueError as e:
-            print 'Exception: ', fname, ':', e
+            loaded_script_state = json.load(f_obj)
+        except ValueError as ex:
+            print 'Exception: ', fname, ':', ex
             return
 
-    if not isinstance(jScriptState, dict):
+    if not isinstance(loaded_script_state, dict):
         print 'Invalid data in', fname
         return
 
-    jLocalVars = jScriptState.pop('localVars')
-    if isinstance(jLocalVars, dict):
-        scriptState['localVars'] = jLocalVars;
+    # before copying, ensure that object exists and of proper type
+    for state_key in ['localVars', 'appsHistory', 'queuesStats']:
+        if state_key in loaded_script_state:
+            state_val = loaded_script_state[state_key]
+            if isinstance(state_val, dict):
+                ss_obj[state_key] = state_val
 
-    jAppsHistory = jScriptState.pop('appsHistory')
-    if isinstance(jAppsHistory, dict):
-        scriptState['appsHistory'] = jAppsHistory
 
-    jQueuesStats = jScriptState.pop('queuesStats')
-    if isinstance(jQueuesStats, dict):
-        scriptState['queuesStats'] = jQueuesStats
+def scriptstate_save_to_file(ss_obj, fname):
+    """Saves collected state for the next invocation"""
+    with open(fname, 'w') as f_obj:
+        json.dump(ss_obj, f_obj)
 
-def ScriptState_saveToFile(ss, fname):
-    with open(fname, 'w') as fh:
-        json.dump(ss, fh)
 
-def ScriptState_jumpTo(ss, treePath):
-    if treePath == None:
-        return ss
-    if not isinstance(treePath, list):
-        raise ValueError(ex_arg_not_a_list)
+def scriptstate_jump_to(ss_obj, tree_path):
+    """Walks the path through the tree structure"""
+    if tree_path is None:
+        return ss_obj
+    if not isinstance(tree_path, list):
+        raise ValueError(EX_ARG_NOT_A_LIST)
 
-    ptr = ss
+    subtree = ss_obj
 
-    while len(treePath) > 0:
-        if not isinstance(ptr, dict):
-            print 'Cannot process ', treePath[0]
-            return ptr
-        if not treePath[0] in ptr:
-            raise KeyError('Invalid node ' + treePath[0])
+    while len(tree_path) > 0:
+        if not isinstance(subtree, dict):
+            print 'Cannot process ', tree_path[0]
+            return subtree
+        if tree_path[0] not in subtree:
+            raise KeyError('Invalid node ' + tree_path[0])
 
-        ptr = ptr.pop(treePath.pop(0))
+        subtree = subtree.pop(tree_path.pop(0))
 
-    return ptr
+    return subtree
 
-def ScriptState_jumpTo_safe(ss, treePath):
+
+def scriptstate_safe_jump_to(ss_obj, tree_path):
+    """Tries to reach the leaf of the tree structure"""
     try:
-        leaf = ScriptState_jumpTo(ss, treePath)
-    except Exception:
+        leaf = scriptstate_jump_to(ss_obj, tree_path)
+    except Exception:   # pylint: disable=broad-except
+        # This function is involved in creating output for zabbix-agent
+        # userparameters scripts.  Any nontrivial output (including
+        # any kind of exceptions) is useless, thus, exceptions are
+        # suppressed and ZBX_UNSUPPORTED is reported:
         zbx_unsupp_exit()
         ## NOTREACHED ##
 
@@ -284,43 +261,44 @@ def ScriptState_jumpTo_safe(ss, treePath):
 
     return leaf
 
-## --- YarnRMAppsPoller ------------------------------------------------
 
-def _YarnRMAppsPoller_pollClusterAppsAPI(baseURL, finishedTime):
-    finishedTimeMs = str(int(finishedTime) * 1000)
-    hdrs = { 'Accept'       : 'application/json' }
-    pars = { 'states'       : 'failed,killed,finished',
-             'deSelects'    : 'resourceRequests',
-             'finishedTimeBegin' : finishedTimeMs
-    }
-    url  = baseURL + '/ws/v1/cluster/apps'
+def _yarnrm_poll_cluster_apps_api(base_url, finished_time):
+    """Requests data (including apps list) from the YARN RM API"""
+    finished_time_ms = str(int(finished_time) * 1000)
+    hdrs = {'Accept'       : 'application/json'}
+    pars = {'states'       : 'failed,killed,finished',
+            'deSelects'    : 'resourceRequests',
+            'finishedTimeBegin' : finished_time_ms
+           }
+    url = base_url + '/ws/v1/cluster/apps'
 
     # Query external resource with HTTP GET
     try:
         reply = requests.get(url, headers=hdrs, params=pars)
-        if (reply.status_code != requests.codes.ok):
+        if reply.status_code != requests.codes.ok:
             print 'Status Code:', reply.status_code
             print 'HTTP request failed'
             exit(0)
-    except requests.exceptions.RequestException as e:
-        print 'RequestException: ', e
+    except requests.exceptions.RequestException as ex:
+        print 'RequestException: ', ex
         print 'An exception occured while querying external resource'
         exit(0)
-    
+
     # Verify reply length
-    if (len(reply.text) == 0):
+    if len(reply.text) == 0:
         print 'HTTP answer len:', len(reply.text)
         print 'Nothing to process: got zero length response'
         exit(0)
-    
+
     # Treat response as JSON
     try:
-        jsonResponse = reply.json();
-    except ValueError as e:
-        print 'ValueError Exception: ', e
+        json_response = reply.json()
+    except ValueError as ex:
+        print 'ValueError Exception: ', ex
         exit(0)
-    
-    return jsonResponse
+
+    return json_response
+
 
 # (c) https://hadoop.apache.org/docs/stable/hadoop-yarn/hadoop-yarn-site/ \
 #      ResourceManagerRest.html#Cluster_Applications_API
@@ -329,135 +307,129 @@ def _YarnRMAppsPoller_pollClusterAppsAPI(baseURL, finishedTime):
 #  "apps": {
 #    "app": [
 #      {
-#        "id": "application_1519830322804_0388", 
+#        "id": "application_1519830322804_0388",
 #        ...
 #-----------------------------------------------------------------------
 #   An exact structure is expected here ^, thus I step two levels in
 # depth to reach a list of applications:
-def _YarnRMAppsPoller_extractAppsList(jResp):
-    if isinstance(jResp, dict):
-        js2 = jResp.pop('apps')
+def _yarnrm_extract_apps_list(yarnrm_resp):
+    """Extracts apps list skipping other info from YARN RM response"""
+    list_of_apps = []
+    if isinstance(yarnrm_resp, dict):
+        js2 = yarnrm_resp.pop('apps')
         if isinstance(js2, dict):
-            listOfApps = js2.pop('app')
-            if not isinstance(listOfApps, list):
-                raise ValueError(ex_unexpected_struct)
-        else:
-            raise ValueError(ex_unexpected_struct)
+            list_of_apps = js2.pop('app')
+            if not isinstance(list_of_apps, list):
+                raise ValueError(EX_UNEXPECTED_STRUCT)
     else:
-        raise TypeError(ex_arg_not_a_dict)
+        raise TypeError(EX_ARG_NOT_A_DICT)
 
-    return listOfApps
+    return list_of_apps
 
-def YarnRMAppsPoller_getFinalizedAppsList(baseURL, finishedTime):
-    jResp    = _YarnRMAppsPoller_pollClusterAppsAPI(baseURL, finishedTime)
-    appsList = _YarnRMAppsPoller_extractAppsList(jResp)
 
-    return appsList
+def yarnrm_get_finalized_apps_list(base_url, finished_time):
+    """Retrieves handy list of applications from YARN RM"""
+    yarnrm_resp = _yarnrm_poll_cluster_apps_api(base_url, finished_time)
+    apps_list = _yarnrm_extract_apps_list(yarnrm_resp)
 
-## --- Config ----------------------------------------------------------
+    return apps_list
 
-def Config_readFrom(fname, ioCfg):
-    confParser = ConfigParser.RawConfigParser()
-    confParser.read(fname)
+def config_read_from(fname, script_config):
+    """Reads key:value pairs from an external file"""
+    config_parser = ConfigParser.RawConfigParser()
+    config_parser.read(fname)
 
-    for key in ioCfg:
-        val = confParser.get('global', key)
-        ioCfg[key] = val
+    for key in script_config:
+        val = config_parser.get('global', key)
+        script_config[key] = val
 
-## --- fapps -----------------------------------------------------------
-# Config file + CMD ARGV handling
-
-# The following values should be supplied by script's config file:
-cfg = {
-    'baseurl'        : '',
-    'state_filename' : '',
-    'keep_history'   : ''
-}
-
-Config_readFrom('yarnappstats.cfg', cfg)
-
-currentTime = int(time.time())
 
 # Script's modes of operation
-OP_POLL  = 'poll'
+OP_POLL = 'poll'
 OP_PRINT = 'print'
-OP_DUMP  = 'dump'
+OP_DUMP = 'dump'
 OP_MODES = (OP_POLL, OP_PRINT, OP_DUMP)
 
-# Remove script name from ARGV
-sys.argv.pop(0)
 
-if 0 == len(sys.argv):
-    print 'missing command'
-    exit(0)
+def main():
+    """I'm main(), just main()"""
+    # The following values should be supplied by script's config file:
+    cfg = {
+        'baseurl'        : '',
+        'state_filename' : '',
+        'keep_history'   : ''
+    }
 
-cmd = sys.argv.pop(0)
-if not cmd in OP_MODES:
-    print 'unknown command, choose from ', OP_MODES
-    exit(0)
+    script_state = {
+        'localVars'   : {},
+        'appsHistory' : {},
+        'queuesStats' : {}
+    }
 
-#-----------------------------------------------------------------------
-# Load saved script state; missing state file should not break the run
+    config_read_from('yarnappstats.cfg', cfg)
 
-scriptState['appsHistory'] = AppsHistory_initObject()
-scriptState['queuesStats'] = QueuesStats_initObject()
-scriptState['localVars']   =   LocalVars_initObject()
+    current_time = int(time.time())
 
-try:
-    ScriptState_loadFromFile(scriptState, cfg['state_filename'])
-except IOError as e:
+    # Remove script name from ARGV
+    sys.argv.pop(0)
+
+    if len(sys.argv) == 0:
+        print 'missing command'
+        exit(0)
+
+    cmd = sys.argv.pop(0)
+    if cmd not in OP_MODES:
+        print 'unknown command, choose from ', OP_MODES
+        exit(0)
+
+    # Load saved script state; missing state file should not break the run
+    try:
+        scriptstate_load_from_file(script_state, cfg['state_filename'])
+    except IOError as ex:
+        if cmd == OP_PRINT:
+            zbx_unsupp_exit()
+            ## NOTREACHED ##
+        else:
+            print 'Exception: ', ex
+
+    appshistory_obj = script_state['appsHistory']
+    queuesstats_obj = script_state['queuesStats']
+    localvars_obj = script_state['localVars']
+
+    if cmd != OP_POLL:
+        # create and fill out fake variable 'lastpoll_ago':
+        lastpoll_ago = current_time - int(
+            localvars_get(localvars_obj, 'lastpoll_at'))
+        localvars_set(localvars_obj, 'lastpoll_ago', str(lastpoll_ago))
+
     if cmd == OP_PRINT:
-        zbx_unsupp_exit()
-        ## NOTREACHED ##
-    else:
-        print 'Exception: ', e
+        # Zabbix-interface to script state
+        ptr = scriptstate_safe_jump_to(script_state, sys.argv)
+        print ptr
 
-ahObj = scriptState['appsHistory']
-qsObj = scriptState['queuesStats']
-lvObj = scriptState['localVars']
+    elif cmd == OP_DUMP:
+        print '# Debug interface'
+        ptr = scriptstate_jump_to(script_state, sys.argv)
+        print json.dumps(ptr, indent=4, sort_keys=True)
 
-#-----------------------------------------------------------------------
-# OP_PRINT, OP_DUMP modes of operation are handled here
+    elif cmd == OP_POLL:
+        timestamp_in_past = current_time - int(cfg['keep_history'])
+        list_of_apps = yarnrm_get_finalized_apps_list(cfg['baseurl'],
+                                                      timestamp_in_past)
+        for app in list_of_apps:
+            appshistory_insert_app_record(appshistory_obj, app)
 
-if (cmd != OP_POLL):
-    # create and fill out fake variable 'lastpoll_ago':
-    lastpoll_at = int(LocalVars_get(lvObj, 'lastpoll_at'))
-    lastpoll_ago = currentTime - lastpoll_at
-    LocalVars_set(lvObj, 'lastpoll_ago', str(lastpoll_ago))
+        removed_apps_qty = appshistory_remove_old_records(
+            appshistory_obj, timestamp_in_past)
 
-if (cmd == OP_PRINT):
-    # Zabbix-interface to script state
-    ptr = ScriptState_jumpTo_safe(scriptState, sys.argv)
-    print ptr
-    exit(0)
-    ## NOTREACHED ##
+        added_apps_qty = appshistory_update_queue_stats(
+            appshistory_obj, queuesstats_obj)
 
-if (cmd == OP_DUMP):
-    print '# Debug interface'
-    ptr = ScriptState_jumpTo(scriptState, sys.argv)
-    print json.dumps(ptr, indent=4, sort_keys=True)
-    exit(0)
-    ## NOTREACHED ##
+        if 'verbose' in sys.argv:
+            print 'appsHistory: added ', added_apps_qty,
+            print ', removed ', removed_apps_qty
+        localvars_set(localvars_obj, 'lastpoll_at', str(current_time))
+        scriptstate_save_to_file(script_state, cfg['state_filename'])
 
-#-----------------------------------------------------------------------
-# OP_POLL mode:
-
-timestampInPast = currentTime - int(cfg['keep_history'])
-
-listOfApps = YarnRMAppsPoller_getFinalizedAppsList(cfg['baseurl'],
-    timestampInPast)
-
-for app in listOfApps:
-    AppsHistory_insertAppRecord(ahObj, app)
-
-removedApps = AppsHistory_removeOldRecords(ahObj, timestampInPast)
-
-addedApps   = AppsHistory_updateQueuesStats(ahObj, qsObj)
-
-if 'verbose' in sys.argv:
-    print 'appsHistory: added ', addedApps, ', removed ', removedApps
-
-LocalVars_set(lvObj, 'lastpoll_at', str(currentTime))
-
-ScriptState_saveToFile(scriptState, cfg['state_filename'])
-
+if __name__ == '__main__':
+    main()
