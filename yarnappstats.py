@@ -238,7 +238,7 @@ def scriptstate_jump_to(ss_obj, tree_path):
         if tree_path[0] not in subtree:
             raise KeyError('Invalid node ' + tree_path[0])
 
-        subtree = subtree.pop(tree_path.pop(0))
+        subtree = subtree[tree_path.pop(0)]
 
     return subtree
 
@@ -316,9 +316,9 @@ def _yarnrm_extract_apps_list(yarnrm_resp):
     """Extracts apps list skipping other info from YARN RM response"""
     list_of_apps = []
     if isinstance(yarnrm_resp, dict):
-        js2 = yarnrm_resp.pop('apps')
+        js2 = yarnrm_resp['apps']
         if isinstance(js2, dict):
-            list_of_apps = js2.pop('app')
+            list_of_apps = js2['app']
             if not isinstance(list_of_apps, list):
                 raise ValueError(EX_UNEXPECTED_STRUCT)
     else:
