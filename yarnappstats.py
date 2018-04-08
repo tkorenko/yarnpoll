@@ -26,7 +26,7 @@ EX_QUEUE_NOT_FOUND = 'Queue not found'
 def zbx_unsupp_exit():
     """Hides script's guts from zabbix-agent"""
     print 'ZBX_UNSUPPORTED'
-    exit(0)
+    exit(1)
 
 
 _APPSSTATSDESCRS = (
@@ -278,24 +278,24 @@ def _yarnrm_poll_cluster_apps_api(base_url, finished_time):
         if reply.status_code != requests.codes.ok:
             print 'Status Code:', reply.status_code
             print 'HTTP request failed'
-            exit(0)
+            exit(1)
     except requests.exceptions.RequestException as ex:
         print 'RequestException: ', ex
         print 'An exception occured while querying external resource'
-        exit(0)
+        exit(1)
 
     # Verify reply length
     if len(reply.text) == 0:
         print 'HTTP answer len:', len(reply.text)
         print 'Nothing to process: got zero length response'
-        exit(0)
+        exit(1)
 
     # Treat response as JSON
     try:
         json_response = reply.json()
     except ValueError as ex:
         print 'ValueError Exception: ', ex
-        exit(0)
+        exit(1)
 
     return json_response
 
@@ -375,12 +375,12 @@ def main():
 
     if len(sys.argv) == 0:
         print 'missing command'
-        exit(0)
+        exit(1)
 
     cmd = sys.argv.pop(0)
     if cmd not in OP_MODES:
         print 'unknown command, choose from ', OP_MODES
-        exit(0)
+        exit(1)
 
     # Load saved script state; missing state file should not break the run
     try:
