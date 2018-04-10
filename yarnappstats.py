@@ -21,6 +21,7 @@ EX_UNEXPECTED_STRUCT = 'Unexpected input structure'
 EX_ARG_NOT_A_DICT = 'Function argument is not a dictionary'
 EX_ARG_NOT_A_LIST = 'Function argument is not a list'
 EX_QUEUE_NOT_FOUND = 'Queue not found'
+SCRIPT_CONFIG_FILE = 'yarnappstats.cfg'
 
 
 def zbx_unsupp_exit():
@@ -366,7 +367,7 @@ def main():
         'queuesStats' : {}
     }
 
-    config_read_from('yarnappstats.cfg', cfg)
+    config_read_from(SCRIPT_CONFIG_FILE, cfg)
 
     current_time = int(time.time())
 
