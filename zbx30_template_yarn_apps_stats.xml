@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <zabbix_export>
     <version>3.0</version>
-    <date>2018-04-10T08:46:29Z</date>
+    <date>2018-04-13T15:48:10Z</date>
     <groups>
         <group>
             <name>Linux servers</name>
@@ -24,15 +24,15 @@
             </applications>
             <items>
                 <item>
-                    <name>Last poll</name>
+                    <name>YARN RM Last poll</name>
                     <type>7</type>
                     <snmp_community/>
                     <multiplier>0</multiplier>
                     <snmp_oid/>
                     <key>yarnappstats.lastpoll_ago</key>
-                    <delay>300</delay>
-                    <history>30</history>
-                    <trends>30</trends>
+                    <delay>60</delay>
+                    <history>1</history>
+                    <trends>7</trends>
                     <status>0</status>
                     <value_type>3</value_type>
                     <allowed_hosts/>
@@ -673,7 +673,7 @@
             <macros>
                 <macro>
                     <macro>{$YARNAPPSSTATS_LASTPOLL_AGO_MAX}</macro>
-                    <value>900</value>
+                    <value>600</value>
                 </macro>
             </macros>
             <templates/>
